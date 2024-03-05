@@ -18,6 +18,10 @@ using System.Reactive.Linq;
 using WkyApiSharp.Events.Account;
 using WkyApiSharp.Events;
 using System.Reactive.Subjects;
+using System.Net.Http;
+using System.Net;
+using System.ServiceModel.Syndication;
+using System.Xml;
 
 namespace WkyFast.Service
 {
@@ -28,9 +32,9 @@ namespace WkyFast.Service
         private static WkyApiManager instance = new WkyApiManager();
 
         //事件
-        public IObservable<EventBase> EventReceived => _eventReceivedSubject.AsObservable();
+        //public IObservable<EventBase> EventReceived => _eventReceivedSubject.AsObservable();
 
-        private readonly Subject<EventBase> _eventReceivedSubject = new();
+        //private readonly Subject<EventBase> _eventReceivedSubject = new();
 
         public static WkyApiManager Instance
         {
@@ -40,7 +44,7 @@ namespace WkyFast.Service
             }
         }
 
-        public WkyApi? API
+        public WkyApi API
         {
             get
             {
@@ -49,7 +53,7 @@ namespace WkyFast.Service
         }
 
 
-        private WkyApi? _api = new();
+        private WkyApi _api = new();
 
         public WkyDevice? NowDevice
         {
@@ -86,7 +90,7 @@ namespace WkyFast.Service
                 {
                     Console.WriteLine("任务列表更新，UI刷新");
 
-                    _eventReceivedSubject.OnNext(r);
+                    //_eventReceivedSubject.OnNext(r);
 
                     if (r.Peer != null && r.Peer.PeerId == _nowDevice?.PeerId)
                     {
@@ -124,7 +128,19 @@ namespace WkyFast.Service
                 .OfType<LoginResultEvent>()
                 .Subscribe(async r =>
                 {
-                    _eventReceivedSubject.OnNext(r);
+                    //_eventReceivedSubject.OnNext(r);
+                });
+
+
+            _api?.EventReceived
+                .OfType<DownloadSuccessEvent>()
+                .Subscribe(async r =>
+                {
+                    EasyLogManager.Logger.Info($"下载完成 {r.Task.Data.Name} {r.Task.Data.Path}");
+                    if (AppConfig.Instance.ConfigData.PushDeerOpen)
+                    {
+                        await PushDeer.SendPushDeer($"下载完成 {r.Task.Data.Name}", $"用时 {TimeHelper.SecondsToFormatString((int)r.Task.Data.DownTime)}");
+                    }
                 });
         }
 
@@ -134,7 +150,7 @@ namespace WkyFast.Service
         /// </summary>
         public async Task<WkyDevice> SelectDevice()
         {
-            var device = _api?.GetDeviceWithId(AppConfig.ConfigData.LastDeviceId);
+            var device = _api?.GetDeviceWithId(AppConfig.Instance.ConfigData.LastDeviceId);
             if (device != null)
             {
                 _nowDevice = device;
@@ -172,7 +188,7 @@ namespace WkyFast.Service
         /// 从一个BT的URL添加到下载中（用于订阅的下载）
         /// </summary>
         /// <param name="url"></param>
-        public async Task<WkyDownloadResult> DownloadBtFileUrl(string url, WkyDevice device,  string path)
+        public async Task<WkyDownloadResult> DownloadBtFileUrl(string url, WkyDevice device,  string path, string taskName = "")
         {
             WkyDownloadResult downloadResult = new WkyDownloadResult();
             downloadResult.SuccessCount = 0;
@@ -186,15 +202,33 @@ namespace WkyFast.Service
 
             try
             {
-                var data = await url.WithTimeout(15).GetBytesAsync();
+                byte[] data;
+                if (AppConfig.Instance.ConfigData.SubscriptionProxyOpen && !string.IsNullOrEmpty(AppConfig.Instance.ConfigData.SubscriptionProxy))
+                {
+                    var proxyUrl = AppConfig.Instance.ConfigData.SubscriptionProxy;
+                    var handler = new HttpClientHandler
+                    {
+                        UseProxy = true,
+                        Proxy = new WebProxy(proxyUrl)
+                    };
+                    var client = new HttpClient(handler);
+                    var flurlClient = new FlurlClient(client);
+                    data = url.WithClient(flurlClient).GetBytesAsync().Result;
+
+                }
+                else
+                {
+                    data = await url.WithTimeout(15).GetBytesAsync();
+                }
 
                 var bcCheck = await _api?.BtCheck(wkyDevice?.Device.Peerid, data);
                 Debug.WriteLine(bcCheck.ToString());
                 if (bcCheck.Rtn == 0)
                 {
-                    var result = await _api?.CreateTaskWithBtCheck(wkyDevice.Device.Peerid, path, bcCheck);
+                    var result = await _api?.CreateTaskWithBtCheck(wkyDevice.Device.Peerid, path, bcCheck, taskName);
                     if (result.Rtn == 0)
                     {
+                        downloadResult.Result = result;
                         downloadResult.AllTaskCount = result.Tasks.Length;
                         foreach (var item in result.Tasks)
                         {

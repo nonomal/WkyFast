@@ -3,26 +3,79 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using System.Xml.Linq;
 
 namespace WkyFast.Service.Model
 {
 
 
-
-
-
-    public enum TaskState
-    {
-        Adding = 0,//0 => "添加中",
-        Downloading = 1,//1 => "下载中",
-        Waiting = 8,//8 => "等待中",
-        Pause = 9,//9 => "已暂停",
-        Completed = 11, //11 => "已完成",
-        PreparingAdd//14 => "准备添加中",
-    }
-
     public class TaskModel : BaseNotificationModel
     {
+        //获取展示用的名字
+
+        public bool FromSubscription
+        {
+            get
+            {
+                return SubscriptionManager.Instance.TaskUrlToSubscriptionName.ContainsKey(Data.Url);
+            }
+
+        }
+
+        /// <summary>
+        /// 绑定的是此代码来显示名字
+        /// </summary>
+        public string ShowName { 
+            get 
+            { 
+                if (FromSubscription)
+                {
+                    if (SubscriptionManager.Instance.TaskUrlToSubscriptionName.ContainsKey(Data.Url))
+                    {
+                        var name = (string)SubscriptionManager.Instance.TaskUrlToSubscriptionName[Data.Url];
+                        if (!string.IsNullOrWhiteSpace(name))
+                        {
+                            return name;
+                        }
+                    }
+                    return Data.Name;
+
+                }
+                else
+                {
+                    return Data.Name;
+                }
+            
+            
+            } 
+        }
+
+        public string SubscriptionName
+        {
+            get
+            {
+                if (FromSubscription)
+                {
+                    if (SubscriptionManager.Instance.TaskUrlToSubscriptionName.ContainsKey(Data.Name))
+                    {
+                        var name = (string)SubscriptionManager.Instance.TaskUrlToSubscriptionName[Data.Name];
+                        if (!string.IsNullOrWhiteSpace(name))
+                        {
+                            return name;
+                        }
+                    }
+                    return Data.Name;
+
+                }
+                else
+                {
+                    return Data.Name;
+                }
+
+
+            }
+        }
+
         public WkyApiSharp.Service.Model.RemoteDownloadList.Task Data { get; set; }
     }
 }

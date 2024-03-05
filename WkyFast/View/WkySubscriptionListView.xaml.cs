@@ -79,16 +79,50 @@ namespace WkyFast.View
                 menu.Items.Clear();
                 if (_lastSubscriptionModel != null)
                 {
+                    MenuItem menuCopyUrl = new MenuItem() { Header = "复制URL" };
+                    menuCopyUrl.Click += MenuCopyUrl_Click; ;
+
+                    MenuItem menuReDownload = new MenuItem() { Header = "重新下载" };
+                    menuReDownload.Click += MenuReDownload_Click; ;
+
                     MenuItem menuDelete = new MenuItem() { Header = "删除" };
                     menuDelete.Click += MenuDelete_Click;
+                    menu.Items.Add(menuCopyUrl);
+                    menu.Items.Add(menuReDownload);
                     menu.Items.Add(menuDelete);
                     DataGrid row = sender as DataGrid;
+
+
                     row.ContextMenu = menu;
                 }
 
                 
 
             };
+        }
+
+        private void MenuCopyUrl_Click(object sender, RoutedEventArgs e)
+        {
+            Clipboard.SetDataObject(_lastSubscriptionModel.Url);
+            
+        }
+
+        
+        private void MenuReDownload_Click(object sender, RoutedEventArgs e)
+        {
+            //SubscriptionManager.Instance.SubscriptionModel.Remove(_lastSubscriptionModel);
+            //SubscriptionManager.Instance.Save();
+
+            if (!SubscriptionManager.Instance.Subscribing)
+            {
+                _lastSubscriptionModel.AlreadyAddedDownloadModel = new ObservableCollection<SubscriptionSubTaskModel> { };
+                SubscriptionManager.Instance.CheckSubscriptionOne(_lastSubscriptionModel);
+            }
+            else
+            {
+                MainWindow.Instance.ShowSnackbar("当前无法操作", $"正在执行订阅中...");
+            }
+
         }
 
         private void MenuDelete_Click(object sender, RoutedEventArgs e)

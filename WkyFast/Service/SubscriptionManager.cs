@@ -17,12 +17,18 @@ using WkyFast.Utils;
 using WkyFast.Service.Model.SubscriptionModel;
 using System.Text.RegularExpressions;
 using WkyApiSharp.Service.Model;
+using System.Collections;
+using System.Net.Http;
+using System.Net;
+using MemoryPack;
+using Flurl.Http.Configuration;
 
 namespace WkyFast.Service
 {
     public class SubscriptionManager
     {
-        
+        public event Action<int, int> OnSubscriptionProgressChanged;
+
         private static SubscriptionManager instance = new SubscriptionManager();
 
         public static SubscriptionManager Instance
@@ -53,10 +59,18 @@ namespace WkyFast.Service
             }
         }
 
-
-
         public ObservableCollection<SubscriptionModel> SubscriptionModel { get; set; } = new ObservableCollection<SubscriptionModel>();
 
+        /// <summary>
+        /// 由每次加载SubscriptionModel时，进行初始化，本身不存储
+        /// TODO 存储所有的订阅下载 使用MemoryPack
+        /// </summary>
+        public Dictionary<string, string> TaskUrlToSubscriptionName { get; set; } = new ();
+
+        public bool Subscribing { get; set; } = false;
+
+
+        private object _look = new object();
 
         public SubscriptionManager()
         {
@@ -68,6 +82,7 @@ namespace WkyFast.Service
         {
             _tokenSource.Cancel();
         }
+
         //private void SubscriptionModel_CollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
         //{
         //    Save();
@@ -192,6 +207,29 @@ namespace WkyFast.Service
 
         }
 
+
+        public string GetSubscriptionName(string downloadName)
+        {
+            foreach (var sub in SubscriptionModel)
+            {
+                foreach (var model in sub.AlreadyAddedDownloadModel)
+                {
+                    if (model.Result != null && model.Result.Tasks.Count() > 0)
+                    {
+                        foreach (var task in model.Result.Tasks)
+                        {
+                            if (task.Name == downloadName)
+                            {
+                                return model.Name;
+                            }
+                        }
+                        
+                    }
+                }
+            }
+            return "";
+        }
+
         /// <summary>
         /// 通过网络获取订阅地址的Title
         /// </summary>
@@ -200,179 +238,364 @@ namespace WkyFast.Service
         {
             try
             {
-                XmlReader reader = XmlReader.Create(url);
-                SyndicationFeed feed = SyndicationFeed.Load(reader);
-                reader.Close();
-                EasyLogManager.Logger.Info($"获取订阅标题：{feed.Title.Text}");
-                return feed.Title.Text;
+                EasyLogManager.Logger.Info($"订阅地址：{url}");
+                XmlReader reader;
+                SyndicationFeed feed;
+
+                try
+                {
+
+                    if (AppConfig.Instance.ConfigData.SubscriptionProxyOpen && !string.IsNullOrEmpty(AppConfig.Instance.ConfigData.SubscriptionProxy))
+                    {
+                        var proxyUrl = AppConfig.Instance.ConfigData.SubscriptionProxy;
+                        var handler = new HttpClientHandler
+                        {
+                            UseProxy = true,
+                            Proxy = new WebProxy(proxyUrl)
+                        };
+                        var client = new HttpClient(handler);
+                        var flurlClient = new FlurlClient(client);
+                        var data = url
+                            .WithClient(flurlClient).GetStreamAsync().Result;
+
+                        reader = XmlReader.Create(data);
+                        feed = SyndicationFeed.Load(reader);
+                        reader.Close();
+                    }
+                    else
+                    {
+                        reader = XmlReader.Create(url);
+                        feed = SyndicationFeed.Load(reader);
+                        reader.Close();
+                    }
+                    EasyLogManager.Logger.Info($"获取订阅标题：{feed.Title.Text}");
+                    return feed.Title.Text;
+
+                }
+                catch (Exception e)
+                {
+                    EasyLogManager.Logger.Error($"无法访问订阅：{url} \n {e}");
+                }
+
+
             }
             catch (Exception e)
             {
                 EasyLogManager.Logger.Error($"获取订阅标题失败");
-                return "";
+                
             }
+            return "";
         }
 
         /// <summary>
         /// 检查一次订阅
         /// </summary>
-        private void CheckSubscription()
+        private async void CheckSubscription()
         {
+            Subscribing = true;
+
             EasyLogManager.Logger.Info("检查订阅...");
-            foreach (var subscription in SubscriptionModel)
+
+            var copyList = new List<SubscriptionModel>(SubscriptionModel);
+
+
+            OnSubscriptionProgressChanged?.Invoke(0, copyList.Count);
+
+            for (int i = 0; i < copyList.Count; i++)
             {
-                string url = subscription.Url;
-                
-                EasyLogManager.Logger.Info($"订阅地址：{url}");
+                lock (_look)
+                {
+                    CheckSubscriptionOne(copyList[i]);
+                }
+
+                OnSubscriptionProgressChanged?.Invoke(i, copyList.Count);
+            }
+
+            OnSubscriptionProgressChanged?.Invoke(copyList.Count, copyList.Count);
+
+            Subscribing = false;
+        }
+
+        public async void CheckSubscriptionOne(SubscriptionModel subscription)
+        {
+            string url = subscription.Url;
+
+            EasyLogManager.Logger.Info($"订阅地址：{url}");
 
 
-                XmlReader reader ;
-                SyndicationFeed feed ;
+            XmlReader reader;
+            SyndicationFeed feed = null;
 
-                try
+            try
+            {
+
+                if (AppConfig.Instance.ConfigData.SubscriptionProxyOpen && !string.IsNullOrEmpty(AppConfig.Instance.ConfigData.SubscriptionProxy))
+                {
+                    var proxyUrl = AppConfig.Instance.ConfigData.SubscriptionProxy;
+                    var handler = new HttpClientHandler
+                    {
+                        UseProxy = true,
+                        Proxy = new WebProxy(proxyUrl)
+                    };
+                    var client = new HttpClient(handler);
+                    var flurlClient = new FlurlClient(client);
+
+
+                    var data = url
+                        .WithClient(flurlClient).GetStreamAsync().Result;
+
+                    reader = XmlReader.Create(data);
+                    feed = SyndicationFeed.Load(reader);
+                    reader.Close();
+                }
+                else
                 {
                     reader = XmlReader.Create(url);
                     feed = SyndicationFeed.Load(reader);
                     reader.Close();
                 }
-                catch (Exception e)
+
+            }
+            catch (Exception e)
+            {
+                EasyLogManager.Logger.Error($"无法访问订阅：{url} \n {e}");
+                //continue;
+                return;
+            }
+
+
+            subscription.TaskFullCount = feed!.Items.Count();
+            subscription.Name = feed.Title.Text;
+            subscription.TaskMatchCount = GetMatchTaskCount(feed.Items, subscription);
+
+            EasyLogManager.Logger.Info($"订阅标题：{subscription.Name} 订阅总任务数：{subscription.TaskFullCount} 符合任务数：{subscription.TaskMatchCount}");
+
+            foreach (SyndicationItem item in feed.Items)
+            {
+                string subject = item.Title.Text;
+                string summary = item.Summary.Text;
+
+
+                if (CheckTitle(subscription, subject))
                 {
-                    EasyLogManager.Logger.Info($"无法访问订阅：{url}");
+                    //EasyLogManager.Logger.Info($"标题验证 {subject} 通过，准备下载");
+                }
+                else
+                {
+                    //EasyLogManager.Logger.Info($"标题验证 {subject} 未通过");
                     continue;
                 }
 
-
-                subscription.TaskFullCount = feed.Items.Count();
-                subscription.Name = feed.Title.Text;
-                subscription.TaskMatchCount = GetMatchTaskCount(feed.Items, subscription);
-
-                EasyLogManager.Logger.Info($"订阅标题：{subscription.Name} 订阅总任务数：{subscription.TaskFullCount} 符合任务数：{subscription.TaskMatchCount}");
-
-                foreach (SyndicationItem item in feed.Items)
+                foreach (var link in item.Links)
                 {
-                    string subject = item.Title.Text;
-                    string summary = item.Summary.Text;
+                    if (link.RelationshipType == "enclosure" ||
+                        (!string.IsNullOrWhiteSpace(link.MediaType) && link.MediaType.Contains("bittorrent")))
+                    {
+                        //"application/x-bittorrent"
+                        string downloadUrl = link.Uri.ToString();
 
-
-                    if (CheckTitle(subscription, subject))
-                    {
-                        //EasyLogManager.Logger.Info($"标题验证 {subject} 通过，准备下载");
-                    }
-                    else
-                    {
-                        //EasyLogManager.Logger.Info($"标题验证 {subject} 未通过");
-                        continue;
-                    }
-                    
-                    foreach (var link in item.Links)
-                    {
-                        if (link.RelationshipType == "enclosure" || 
-                            (!string.IsNullOrWhiteSpace(link.MediaType) && link.MediaType.Contains("bittorrent")))
+                        if (subscription.AlreadyAddedDownloadModel == null)
                         {
-                            //"application/x-bittorrent"
-                            string downloadUrl = link.Uri.ToString();
+                            subscription.AlreadyAddedDownloadModel = new ObservableCollection<SubscriptionSubTaskModel> { };
+                        }
 
-                            if (subscription.AlreadyAddedDownloadModel == null)
+
+                        //如果没有下载过
+                        if (!subscription.AlreadyAddedDownloadModel.Any(a => a.Url.Contains(downloadUrl)))
+                        {
+                            try
                             {
-                                subscription.AlreadyAddedDownloadModel = new ObservableCollection<SubscriptionSubTaskModel> { };
-                            }
+                                //TODO 开始下载
 
+                                var basePaths = WkyApiManager.Instance.GetUsbInfoDefPath();
 
-                            //如果没有下载过
-                            if (!subscription.AlreadyAddedDownloadModel.Any(a => a.Url.Contains(downloadUrl)))
-                            {
-                                try
+                                if (basePaths.Count == 0)
                                 {
-                                    //TODO 开始下载
-
-                                    var basePaths = WkyApiManager.Instance.GetUsbInfoDefPath();
-
-                                    if (basePaths.Count == 0)
-                                    {
-                                        EasyLogManager.Logger.Error($"添加失败，没有获取到存储设备");
-                                        return;
-                                    }
-
-                                    
-                                    var savePath = basePaths[0] + (subscription.Path.StartsWith("/") ? "" : "/") + subscription.Path;
-
-                                    //如果是一个完整路径，则直接使用，否则使用旧逻辑
-                                    bool isFullPath = basePaths.Any(a => subscription.Path.StartsWith(a));
-                                    if (isFullPath)
-                                    {
-                                        savePath = subscription.Path;
-                                    }
-
-                                    EasyLogManager.Logger.Info($"添加下载{subject} {link} {savePath}");
-
-                                    var addResult = WkyApiManager.Instance.DownloadBtFileUrl(downloadUrl, subscription.Device, savePath).Result;
-
-                                    if (addResult.SuccessCount > 0)
-                                    {
-                                        subscription.AlreadyAddedDownloadModel.Add(new SubscriptionSubTaskModel() { Name = subject, Url = downloadUrl} );
-                                        EasyLogManager.Logger.Info($"添加成功");
-                                    }
-                                    else if (addResult.DuplicateAddTaskCount > 0)
-                                    {
-                                        subscription.AlreadyAddedDownloadModel.Add(new SubscriptionSubTaskModel() { Name = subject, Url = downloadUrl });
-                                        EasyLogManager.Logger.Info($"成功，任务已经存在，不再重复添加");
-                                    }
-                                    else
-                                    {
-                                        EasyLogManager.Logger.Error($"添加失败");
-                                        //下载失败
-                                    }
-                                }
-                                catch (Exception ex)
-                                {
-                                    EasyLogManager.Logger.Error(ex.ToString());
+                                    EasyLogManager.Logger.Error($"添加失败，没有获取到存储设备");
+                                    return;
                                 }
 
+                                // subscription.Path 为基础目录，一般来说是带有标题的如“/download/订阅标题”
+                                var savePath = basePaths[0] + (subscription.Path.StartsWith("/") ? "" : "/") + subscription.Path;
+                                var episodeTitle = "";
+                                if (subscription.AutoDir)
+                                {
+                                    EasyLogManager.Logger.Info($"使用自动目录分组");
+                                    if (subscription.EpisodeTitleList == null)
+                                    {
+                                        subscription.EpisodeTitleList = new List<string>();
+                                    }
+                                    episodeTitle = subscription.EpisodeTitleList.FirstOrDefault(a => subject.Contains(a));
+                                    if (string.IsNullOrEmpty(episodeTitle) && AppConfig.Instance.ConfigData.OpenAIOpen)
+                                    {
+                                        EasyLogManager.Logger.Info($"获取剧集名称...");
+                                        //使用ChatGPT
+                                        episodeTitle = await ChatGPTTranslatorManager.GetEpisode(subject);
+
+                                        EasyLogManager.Logger.Info($"剧集名称：{episodeTitle}");
+                                        if (!string.IsNullOrEmpty(episodeTitle))
+                                        {
+                                            subscription.EpisodeTitleList.Add(episodeTitle);
+                                        }
+                                    }
+                                }
+
+                                //如果是一个完整路径，则直接使用，否则使用旧逻辑
+                                bool isFullPath = basePaths.Any(a => subscription.Path.StartsWith(a));
+                                if (isFullPath)
+                                {
+                                    savePath = subscription.Path;
+                                }
+
+                                if (!string.IsNullOrEmpty(episodeTitle))
+                                {
+                                    savePath = savePath + "/" + PathHelper.RemoveInvalidChars(episodeTitle);
+                                }
+
+                                EasyLogManager.Logger.Info($"添加下载{subject} {link} {savePath}");
+
+                                //subject
+                                var addResult = WkyApiManager.Instance.DownloadBtFileUrl(downloadUrl, subscription.Device, savePath).Result;
+
+                                var taskUrl = addResult?.Result?.Tasks?.FirstOrDefault()?.Url;
+                                if (!string.IsNullOrWhiteSpace(taskUrl))
+                                {
+                                    TaskUrlToSubscriptionName[taskUrl] = subject;
+                                }
+
+
+                                if (addResult.SuccessCount > 0)
+                                {
+                                    subscription.AlreadyAddedDownloadModel.Add(new SubscriptionSubTaskModel() { Name = subject, Url = downloadUrl, Time = DateTime.Now, Result = addResult.Result });
+                                    EasyLogManager.Logger.Info($"添加成功");
+                                }
+                                else if (addResult.DuplicateAddTaskCount > 0)
+                                {
+                                    subscription.AlreadyAddedDownloadModel.Add(new SubscriptionSubTaskModel() { Name = subject, Url = downloadUrl, Time = DateTime.Now, Result = addResult.Result });
+                                    EasyLogManager.Logger.Info($"成功，任务已经存在，不再重复添加");
+                                }
+                                else
+                                {
+                                    EasyLogManager.Logger.Error($"添加失败");
+                                    //下载失败
+                                }
                             }
+                            catch (Exception ex)
+                            {
+                                EasyLogManager.Logger.Error(ex.ToString());
+                            }
+
                         }
                     }
-
-                    //foreach (SyndicationElementExtension extension in item.ElementExtensions)
-                    //{
-                    //    XElement ele = extension.GetObject<XElement>();
-
-                    //    Debug.WriteLine("节点名称:" + ele.Name);
-                        
-                    //    foreach (XElement node in ele.Nodes())
-                    //    {
-                    //        Debug.WriteLine(node.Name.LocalName + " " + node.Value);
-                    //        if (node.Name.LocalName == "link")
-                    //        {
-                                
-                    //        }
-                    //    }
-
-                    //}
-
                 }
-                Save();
+
+
+
+                //foreach (SyndicationElementExtension extension in item.ElementExtensions)
+                //{
+                //    XElement ele = extension.GetObject<XElement>();
+
+                //    Debug.WriteLine("节点名称:" + ele.Name);
+
+                //    foreach (XElement node in ele.Nodes())
+                //    {
+                //        Debug.WriteLine(node.Name.LocalName + " " + node.Value);
+                //        if (node.Name.LocalName == "link")
+                //        {
+
+                //        }
+                //    }
+
+                //}
+
+            }
+            Save();
+            
+        }
+
+        public void LoadTrueName()
+        {
+            string fileName = @$"UrlNameTable.bin";
+            TaskUrlToSubscriptionName = new Dictionary<string, string>();
+
+            if (File.Exists(fileName))
+            {
+                var fileContent = File.ReadAllBytes(fileName);
+                var val = MemoryPackSerializer.Deserialize<Dictionary<string, string>>(fileContent);
+
+                if (val != null)
+                {
+                    TaskUrlToSubscriptionName = val;
+                }
+
             }
         }
 
 
+        public void SaveTrueName()
+        {
+            string fileName = @$"UrlNameTable.bin";
+
+            var bin = MemoryPackSerializer.Serialize(TaskUrlToSubscriptionName);
+
+            try
+            {
+                File.WriteAllBytes(fileName, bin);
+            }
+            catch (Exception ex)
+            {
+                EasyLogManager.Logger.Error(ex);
+            }
+
+
+
+
+        }
 
         public void Load()
         {
-            string fileName = @$"Subscription_{_user}.json";
-            Debug.WriteLine($"准备载入{fileName}");
-            if (File.Exists(fileName))
+            lock (_look)
             {
-                SubscriptionModel.Clear();
 
-                List<SubscriptionModel> subscriptionModel = JsonConvert.DeserializeObject<List<SubscriptionModel>>(File.ReadAllText(fileName));
+                LoadTrueName();
 
-                if (subscriptionModel != null)
+                string fileName = @$"Subscription_{_user}.json";
+                Debug.WriteLine($"准备载入{fileName}");
+
+                //名称URL
+                //载入TaskUrlToSubscriptionName
+
+                if (File.Exists(fileName))
                 {
-                    foreach (SubscriptionModel item in subscriptionModel)
+                    SubscriptionModel.Clear();
+
+                    List<SubscriptionModel> subscriptionModel = JsonConvert.DeserializeObject<List<SubscriptionModel>>(File.ReadAllText(fileName));
+
+                    if (subscriptionModel != null)
                     {
-                        SubscriptionModel.Add(item);
+                        foreach (SubscriptionModel item in subscriptionModel)
+                        {
+                            SubscriptionModel.Add(item);
+
+                            //加载名称表
+                            foreach (var m in item.AlreadyAddedDownloadModel)
+                            {
+                                var taskUrl = m.Result?.Tasks?.FirstOrDefault()?.Url;
+                                if (!string.IsNullOrWhiteSpace(taskUrl))
+                                {
+                                    TaskUrlToSubscriptionName[taskUrl] = m.Name;
+                                }
+                                
+                            }
+                        }
                     }
+
                 }
+
+                SaveTrueName();
+
+
+
 
             }
         }
@@ -380,15 +603,36 @@ namespace WkyFast.Service
 
         public void Save()
         {
-            Debug.WriteLine("保存订阅");
-            string fileName = @$"Subscription_{_user}.json";
-            var content = JsonConvert.SerializeObject(SubscriptionModel);
-            File.WriteAllText(fileName, content);
+            lock (_look)
+            {
+                Debug.WriteLine("保存订阅");
+
+                try
+                {
+
+                    string fileName = @$"Subscription_{_user}.json";
+                    var content = JsonConvert.SerializeObject(SubscriptionModel);
+                    File.WriteAllText(fileName, content);
+                }
+                catch (Exception ex)
+                {
+                    EasyLogManager.Logger.Error(ex);
+                }
+                try
+                {
+                    SaveTrueName();
+                }
+                catch (Exception ex)
+                {
+                    EasyLogManager.Logger.Error(ex);
+                }
+            }
+
         }
 
         //存储订阅，读取加载订阅
 
-        public bool Add(string url, WkyDevice device, string path, string keyword = "", bool keywordIsRegex = false)
+        public bool Add(string url, WkyDevice device, string path, string keyword = "", bool keywordIsRegex = false, bool autoDir = false)
         {
             if (SubscriptionModel.ToList().Find( a => { return a.Url == url; }) != null)
             {
@@ -403,6 +647,7 @@ namespace WkyFast.Service
             model.IsFilterRegex = keywordIsRegex;
             model.Path = path;
             model.Device = device;
+            model.AutoDir = autoDir;
             EasyLogManager.Logger.Error($"添加订阅：{model.Url}");
 
             SubscriptionModel.Add(model);

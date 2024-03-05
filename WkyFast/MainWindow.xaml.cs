@@ -30,6 +30,7 @@ using System.Threading;
 using WkyApiSharp.Events.Account;
 using System.Reactive.Linq;
 using Wpf.Ui.Mvvm.Contracts;
+using Wpf.Ui.Controls;
 
 namespace WkyFast
 {
@@ -42,6 +43,7 @@ namespace WkyFast
 
         private CancellationTokenSource _tokenTaskListSource = new CancellationTokenSource();
 
+        private bool _needExit = false;
 
         public MainWindow()
         {
@@ -61,11 +63,37 @@ namespace WkyFast
         private async void MetroWindow_Loaded(object sender, RoutedEventArgs e)
         {
             ActionVersion.CheckVersion();
+            SubscriptionManager.Instance.OnSubscriptionProgressChanged += SubscriptionManager_OnSubscriptionProgressChanged;
 
             VisibilityAnimation.SetAnimationType(WkyLoginDialog, VisibilityAnimation.AnimationType.Fade);
+            GAHelper.Instance.RequestPageView($"启动到主界面{ActionVersion.Version}");
+           
             await LoginFunc();
+        }
 
-            
+        private void SubscriptionManager_OnSubscriptionProgressChanged(int now, int max)
+        {
+
+            this.Dispatcher.Invoke(new Action(() =>
+            {
+                if (max > 0 && now != max)
+                {
+                    //进程中
+                    this.subscriptionProgressBar.Visibility = Visibility.Visible;
+                    this.subscriptionProgressBar.Value = now;
+                    this.subscriptionProgressBar.Maximum = max;
+                }
+                else
+                {
+                    this.subscriptionProgressBar.Visibility = Visibility.Hidden;
+                    this.subscriptionProgressBar.Value = 0;
+                    this.subscriptionProgressBar.Maximum = 1;
+                }
+
+
+            }));
+
+
         }
 
         /// <summary>
@@ -116,6 +144,7 @@ namespace WkyFast
                 .OfType<UpdateDeviceResultEvent>()
                 .Subscribe(async r =>
                 {
+                    GAHelper.Instance.Login();
                     Debug.WriteLine("设备更新完毕");
                     if (r.IsSuccess)
                     {
@@ -312,7 +341,7 @@ namespace WkyFast
             WkyDevice device = DeviceComboBox.SelectedItem as WkyDevice;
             if (device != null)
             {
-                AppConfig.ConfigData.LastDeviceId = device.DeviceId;
+                AppConfig.Instance.ConfigData.LastDeviceId = device.DeviceId;
                 var selected = await WkyApiManager.Instance.SelectDevice();
                 //DeviceComboBox.SelectedItem = device;
             }
@@ -349,6 +378,37 @@ namespace WkyFast
         private void NavigationItem_Home_Click(object sender, RoutedEventArgs e)
         {
             BrowserHelper.OpenUrlBrowser("https://github.com/aiqinxuancai/WkyFast");
+        }
+
+        private void HomeButton_MouseDown(object sender, MouseButtonEventArgs e)
+        {
+            BrowserHelper.OpenUrlBrowser("https://github.com/aiqinxuancai/WkyFast");
+        }
+
+        private void TitleBar_CloseClicked(object sender, RoutedEventArgs e)
+        {
+            //自行处理事件，改为最小化
+        }
+
+        private void TaskbarExitMenu_Click(object sender, RoutedEventArgs e)
+        {
+            _needExit = true;
+            this.Close();
+        }
+
+        private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
+        {
+            if (!_needExit)
+            {
+                e.Cancel = true;
+
+                // 自己处理
+                this.Hide();
+                //弹出提示
+                //MyNotifyIcon.
+            }
+
+
         }
     }
 }

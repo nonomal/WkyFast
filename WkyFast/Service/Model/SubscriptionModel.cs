@@ -11,10 +11,15 @@ namespace WkyFast.Service.Model.SubscriptionModel
     using System;
     using System.Collections.Generic;
     using System.Collections.ObjectModel;
+    using System.Collections.Specialized;
     using System.Globalization;
+    using System.Linq;
+    using MemoryPack;
     using Newtonsoft.Json;
     using Newtonsoft.Json.Converters;
     using WkyApiSharp.Service.Model;
+    using WkyApiSharp.Service.Model.BtCheck;
+    using WkyApiSharp.Service.Model.CreateTaskResult;
 
     public partial class SubscriptionModel : BaseNotificationModel
     {
@@ -27,6 +32,13 @@ namespace WkyFast.Service.Model.SubscriptionModel
 
         [JsonProperty("Device")]
         public WkyDevice Device { get; set; }
+
+        [JsonProperty("AutoDir")]
+        public bool AutoDir { get; set; }
+
+
+        [JsonProperty("EpisodeTitleList")]
+        public List<string> EpisodeTitleList { get; set; }
 
         /// <summary>
         /// 存储路径
@@ -43,9 +55,6 @@ namespace WkyFast.Service.Model.SubscriptionModel
         [JsonProperty("IsFilterRegex")]
         public bool IsFilterRegex { get; set; }
 
-
-
-
         /// <summary>
         /// 任务总数
         /// </summary>
@@ -58,11 +67,64 @@ namespace WkyFast.Service.Model.SubscriptionModel
         [JsonProperty("TaskMatchCount")]
         public int TaskMatchCount { get; set; }
 
+
+        [JsonIgnore]
+        private string _lastSubscriptionContent;
+
+        /// <summary>
+        /// 匹配任务总数
+        /// </summary>
+        [JsonIgnore]
+        public string LastSubscriptionContent { 
+            get 
+            {
+                return _lastSubscriptionContent;
+            } 
+        }
+
+
         /// <summary>
         /// 已经添加了下载的任务
         /// </summary>
         [JsonProperty("AlreadyAddedDownloadModel")]
         public ObservableCollection<SubscriptionSubTaskModel> AlreadyAddedDownloadModel { get; set; } = new ObservableCollection<SubscriptionSubTaskModel> { };
+
+
+        public SubscriptionModel()
+        {
+            AlreadyAddedDownloadModel.CollectionChanged += AlreadyAddedDownloadModel_CollectionChanged;
+        }
+
+        private void AlreadyAddedDownloadModel_CollectionChanged(object sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+        {
+
+            //变化，需要刷新 LastSubscriptionContent
+
+            if (e.Action == NotifyCollectionChangedAction.Add || e.Action == NotifyCollectionChangedAction.Replace)
+            {
+                if (AlreadyAddedDownloadModel.Count == 0)
+                {
+                    _lastSubscriptionContent = "无";
+                }
+                else
+                {
+                    SubscriptionSubTaskModel last = AlreadyAddedDownloadModel.LastOrDefault();
+
+                    if (last.Time != DateTime.MinValue)
+                    {
+                        _lastSubscriptionContent = $"{last.Name}\n{last.Time.ToString("yyyy-MM-dd HH:mm:ss")}";
+                    }
+                    else
+                    {
+                        _lastSubscriptionContent = $"{last.Name}";//未赋值时间
+
+                    }
+                    OnPropertyChanged("LastSubscriptionContent");
+                }
+            }
+
+            
+        }
     }
 
     public partial class SubscriptionSubTaskModel : BaseNotificationModel
@@ -72,6 +134,13 @@ namespace WkyFast.Service.Model.SubscriptionModel
 
         [JsonProperty("Name")]
         public string Name { get; set; }
+
+        [JsonProperty("Time")]
+        public DateTime Time { get; set; }
+
+        [JsonProperty("Result")]
+        public WkyApiCreateTaskResultModel Result { get; set; }
+        
     }
 
     public partial class SubscriptionModel

@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Data;
 using System.Windows.Media;
+using WkyApiSharp.Service.Model;
 using WkyFast.Utils;
 using Color = System.Windows.Media.Color;
 using ColorConverter = System.Windows.Media.ColorConverter;
@@ -53,6 +54,7 @@ namespace WkyFast.View.Contver
                 9 => "已暂停",
                 1 => "下载中",
                 11 => "已完成",
+                12 => "缺少资源",
                 14 => "准备添加中",
                 38 => "磁盘写入异常",
                 _ => value,
@@ -79,6 +81,7 @@ namespace WkyFast.View.Contver
                 9 => (Color)ColorConverter.ConvertFromString("#ff9900"),//"已暂停", //橙色
                 1 => (Color)ColorConverter.ConvertFromString("#2d8cf0"),//"下载中", //蓝色
                 11 => (Color)ColorConverter.ConvertFromString("#19be6b"), //已完成 //绿色
+                12 => (Color)ColorConverter.ConvertFromString("#ed4014"),//"缺少资源", //红色
                 14 => (Color)ColorConverter.ConvertFromString("#2d8cf0"),//"准备添加中", //蓝色
                 38 => (Color)ColorConverter.ConvertFromString("#ed4014"),//"磁盘写入异常", //红色
                 _ => (Color)ColorConverter.ConvertFromString("#f8f8f9"), //value, //灰色
@@ -179,6 +182,50 @@ namespace WkyFast.View.Contver
                 1 => Visibility.Visible,
                 _ => Visibility.Collapsed
             };
+        }
+
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            throw new NotImplementedException();
+        }
+    }
+
+
+    [ValueConversion(typeof(uint), typeof(Visibility))]
+    public class ExistVisibilityConverter : IMultiValueConverter
+    {
+        public object Convert(object[] values, Type targetType, object parameter, CultureInfo culture)
+        {
+            if (values.Length == 2)
+            {
+                if ((long)values[0] == 0 && (long)values[1] == (long)TaskState.Completed)
+                {
+                    return Visibility.Visible;
+                }
+            }
+
+            return Visibility.Collapsed;
+        }
+
+
+        public object[] ConvertBack(object value, Type[] targetTypes, object parameter, CultureInfo culture)
+        {
+            throw new NotImplementedException();
+        }
+    }
+
+
+    [ValueConversion(typeof(bool), typeof(Visibility))]
+    public class BoolVisibilityConverter : IValueConverter
+    {
+
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            if (value == null || (bool)value == false )
+            {
+                return Visibility.Collapsed;
+            }
+            return Visibility.Visible;
         }
 
         public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)

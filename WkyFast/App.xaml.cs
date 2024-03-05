@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Media;
 using WkyFast.Service;
+using WkyFast.Utils;
 
 namespace WkyFast
 {
@@ -19,7 +20,7 @@ namespace WkyFast
     {
         static App()
         {
-
+            TimeHelper.SecondsToFormatString(99);
 
             TextOptions.TextFormattingModeProperty.OverrideMetadata(typeof(Window),
                 new FrameworkPropertyMetadata(TextFormattingMode.Display, FrameworkPropertyMetadataOptions.AffectsMeasure | FrameworkPropertyMetadataOptions.AffectsRender | FrameworkPropertyMetadataOptions.Inherits));
@@ -36,6 +37,9 @@ namespace WkyFast
 
         App()
         {
+            //TODO 检查多开
+
+
             AppDomain.CurrentDomain.UnhandledException += CurrentDomain_UnhandledException;
             DispatcherUnhandledException += Current_DispatcherUnhandledException;
         }

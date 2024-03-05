@@ -16,9 +16,12 @@ using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
 using System.Windows.Shapes;
 using WkyApiSharp.Events.Account;
+using WkyApiSharp.Service.Model;
 using WkyFast.Dialogs;
 using WkyFast.Service;
 using WkyFast.Service.Model;
+
+
 
 namespace WkyFast.View
 {
@@ -56,7 +59,7 @@ namespace WkyFast.View
 
         }
 
-        private WkyApiSharp.Service.Model.RemoteDownloadList.Task _lastMenuTaskData;
+        private List<TaskModel> _selectedItems;
 
 
         public static readonly DependencyProperty ViewModelProperty =
@@ -91,78 +94,46 @@ namespace WkyFast.View
 
         private void MainDataGrid_LoadingRow(object sender, DataGridRowEventArgs e)
         {
-            ContextMenu menu = new ContextMenu();
 
-            e.Row.MouseRightButtonDown += (s, a) => {
-                a.Handled = true;
-                TaskModel model = (TaskModel)((DataGridRow)s).DataContext;
-                _lastMenuTaskData = model.Data;
+        }
 
-                if (_lastMenuTaskData != null)
+        private async void MenuCopyTitle_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var title = "";
+                foreach (var item in _selectedItems)
                 {
-                    menu.Items.Clear();
-
-                    /*
-                        0 => "添加中",
-                        8 => "等待中",
-                        9 => "已暂停",
-                        1 => "下载中",
-                        11 => "已完成",
-                        14 => "准备添加中",
-                     */
-
-                    if (_lastMenuTaskData.State == (int)TaskState.Pause)
+                    title += item.Data.Name;
+                    if (item != _selectedItems.Last())
                     {
-                        MenuItem menuRestart = new MenuItem() { Header = "继续下载" };
-                        menuRestart.Click += MenuRestart_Click;
-                        menu.Items.Add(menuRestart);
-                        menu.Items.Add(new Separator());
+                        title += "\n";
                     }
-                    else if (_lastMenuTaskData.State == (int)TaskState.Completed)
-                    {
-                        //已完成 不处理
-                    }
-                    else
-                    {
-                        MenuItem menuStop = new MenuItem() { Header = "暂停" };
-                        menuStop.Click += MenuStop_Click;
-                        menu.Items.Add(menuStop);
-                        menu.Items.Add(new Separator());
-                    }
-
-                    MenuItem menuCopyLink = new MenuItem() { Header = "复制链接" };
-                    menuCopyLink.Click += MenuCopyLink_Click;
-                    menu.Items.Add(menuCopyLink);
-
-                    MenuItem menuDelete = new MenuItem() { Header = "删除任务" };
-                    menuDelete.Click += MenuDelete_Click;
-                    menu.Items.Add(menuDelete);
-
-                    MenuItem menuDeleteFile = new MenuItem() { Header = "删除任务及文件" };
-                    menuDeleteFile.Click += MenuDeleteFile_Click;
-                    menu.Items.Add(menuDeleteFile);
-
- 
-
-                    DataGrid row = sender as DataGrid;
-                    row.ContextMenu = menu;
                 }
-
-
-            };
+                Clipboard.SetDataObject(title);
+                MainWindow.Instance.ShowSnackbar("已复制标题", $"{title}");
+            }
+            catch (Exception ex)
+            {
+                EasyLogManager.Logger.Error(ex);
+            }
         }
 
         private async void MenuRestart_Click(object sender, RoutedEventArgs e)
         {
-            WkyApiSharp.Service.Model.RemoteDownloadList.Task t = _lastMenuTaskData;
             try
             {
-                bool result = await WkyApiManager.Instance.API.StartTask(WkyApiManager.Instance.NowDevice.PeerId, t.GetOperationCode());
-                if (result)
+                foreach (var item in _selectedItems)
                 {
-                    WkyApiManager.Instance.API.UpdateTask();
+                    if (item.Data.State == (int)TaskState.Pause ||
+                            item.Data.State == (int)TaskState.LackResources ||
+                            item.Data.State == (int)TaskState.DiskError)
+                    {
+                        await WkyApiManager.Instance.API.StartTask(WkyApiManager.Instance.NowDevice.PeerId, item.Data.GetOperationCode());
+                    }
                 }
-                
+                WkyApiManager.Instance.API.UpdateTask();
+
             }
             catch (Exception ex)
             {
@@ -172,15 +143,19 @@ namespace WkyFast.View
 
         private async void MenuStop_Click(object sender, RoutedEventArgs e)
         {
-            WkyApiSharp.Service.Model.RemoteDownloadList.Task t = _lastMenuTaskData;
             try
             {
-                bool result = await WkyApiManager.Instance.API.PauseTask(WkyApiManager.Instance.NowDevice.PeerId, t.GetOperationCode());
-                if (result)
+
+                foreach (var item in _selectedItems)
                 {
-                    WkyApiManager.Instance.API.UpdateTask();
+                    if (item.Data.State != (int)TaskState.Completed)
+                    {
+                        await WkyApiManager.Instance.API.PauseTask(WkyApiManager.Instance.NowDevice.PeerId, item.Data.GetOperationCode());
+                    }
                 }
-                    
+
+                WkyApiManager.Instance.API.UpdateTask();
+
             }
             catch (Exception ex)
             {
@@ -190,17 +165,36 @@ namespace WkyFast.View
 
         private async void MenuDelete_Click(object sender, RoutedEventArgs e)
         {
-            WkyApiSharp.Service.Model.RemoteDownloadList.Task t = _lastMenuTaskData;
-            MainWindow.Instance.ShowMessageBox("提示", $"是否确认删除任务\r\n{t.Name}？", async () => {
+            var title = "";
+            foreach (var item in _selectedItems)
+            {
+                title += item.Data.Name;
+                if (item != _selectedItems.Last())
+                {
+                    title += "\n";
+                }
+            }
+
+            var content = "";
+            if (_selectedItems.Count == 1) 
+            {
+                content = $"是否确认删除任务：\r\n{title}？";
+            }
+            else
+            {
+                content = $"是否确认删除{_selectedItems.Count}个任务？";
+            }
+
+            MainWindow.Instance.ShowMessageBox("提示", content, async () => {
                 try
                 {
-                    //status
-                    bool result = await WkyApiManager.Instance.API.DeleteTask(WkyApiManager.Instance.NowDevice.PeerId, t.GetOperationCode());
-                    if (result)
+                    foreach (var item in _selectedItems)
                     {
-                        MainWindow.Instance.ShowSnackbar("成功", $"已删除{t.Name}");
-                        WkyApiManager.Instance.API.UpdateTask();
-                    } 
+                        await WkyApiManager.Instance.API.DeleteTask(WkyApiManager.Instance.NowDevice.PeerId, item.Data.GetOperationCode());
+                    }
+
+                    WkyApiManager.Instance.API.UpdateTask();
+                    MainDataGrid.Dispatcher.Invoke(() => MainDataGrid.UnselectAll());
                 }
                 catch (Exception ex)
                 {
@@ -216,22 +210,45 @@ namespace WkyFast.View
 
         private async void MenuDeleteFile_Click(object sender, RoutedEventArgs e)
         {
-            WkyApiSharp.Service.Model.RemoteDownloadList.Task t = _lastMenuTaskData;
+            var title = "";
+            foreach (var item in _selectedItems)
+            {
+                title += item.Data.Name;
+                if (item != _selectedItems.Last())
+                {
+                    title += "\n";
+                }
+            }
 
-            MainWindow.Instance.ShowMessageBox("提示", $"是否确认删除任务及文件：\r\n{t.Name}？", async () => {
+
+            var content = "";
+            if (_selectedItems.Count == 1)
+            {
+                content = $"是否确认删除任务及文件：\r\n{title}？";
+            }
+            else
+            {
+                content = $"是否确认删除{_selectedItems.Count}个任务及文件？";
+            }
+
+
+
+            MainWindow.Instance.ShowMessageBox("提示", content, async () => {
                 try
                 {
-                    bool result = await WkyApiManager.Instance.API.DeleteTask(WkyApiManager.Instance.NowDevice.PeerId, t.GetOperationCode(), true);
-                    if (result)
+                    foreach (var item in _selectedItems)
                     {
-                        MainWindow.Instance.ShowSnackbar("成功", $"已删除{t.Name}");
-
-                        WkyApiManager.Instance.API.UpdateTask();
+                        await WkyApiManager.Instance.API.DeleteTask(WkyApiManager.Instance.NowDevice.PeerId, item.Data.GetOperationCode(), true);
                     }
+
+                    WkyApiManager.Instance.API.UpdateTask();
+                    MainDataGrid.Dispatcher.Invoke(() => MainDataGrid.UnselectAll());
                 }
                 catch (Exception ex)
                 {
                     EasyLogManager.Logger.Error(ex);
+
+
                 }
             }, () => {
                 //没有操作
@@ -242,18 +259,26 @@ namespace WkyFast.View
         {
             try
             {
-                //_lastMenuTaskData.Url
-                WkyApiSharp.Service.Model.RemoteDownloadList.Task t = _lastMenuTaskData;
 
-                Clipboard.SetDataObject(t.Url);
+                var url = "";
+                foreach (var item in _selectedItems)
+                {
+                    url += item.Data.Url;
+                    if (item != _selectedItems.Last())
+                    {
+                        url += "\n";
+                    }
+                }
+                Clipboard.SetDataObject(url);
+                MainWindow.Instance.ShowSnackbar("已复制链接", $"{url}");
 
-                MainWindow.Instance.ShowSnackbar("已复制链接", $"{t.Url}");
             }
             catch (Exception ex)
             {
                 EasyLogManager.Logger.Error(ex);
             }
         }
+
         private void AddTaskButton_Click(object sender, RoutedEventArgs e)
         {
             if (WkyApiManager.Instance.NowDevice != null)
@@ -263,6 +288,87 @@ namespace WkyFast.View
             else
             {
                 MainWindow.Instance.ShowSnackbar("无法添加任务", $"当前没有选中任何设备");
+            }
+        }
+
+        private void MainDataGrid_ContextMenuOpening(object sender, ContextMenuEventArgs e)
+        {
+            var contextMenu = MainDataGrid.ContextMenu;
+            contextMenu.Items.Clear();
+
+            var selectedItems = new List<TaskModel>();
+            foreach (var item in MainDataGrid.SelectedItems)
+            {
+                var myItem = item as TaskModel;
+                if (myItem != null)
+                {
+                    selectedItems.Add(myItem);
+                }
+            }
+
+            _selectedItems = selectedItems;
+
+            contextMenu.Items.Clear();
+
+            if (selectedItems.Count > 0)
+            {
+                var showRestartMenu = selectedItems.Any(a =>
+                {
+                    if (a.Data.State == (int)TaskState.Pause ||
+                        a.Data.State == (int)TaskState.LackResources ||
+                        a.Data.State == (int)TaskState.DiskError)
+                    {
+                        return true;
+                    }
+                    return false;
+                });
+
+
+                var showStopMenu = selectedItems.Any(a =>
+                {
+                    if (a.Data.State == (int)TaskState.Adding ||
+                        a.Data.State == (int)TaskState.PreparingAdd ||
+                        a.Data.State == (int)TaskState.Downloading)
+                    {
+                        return true;
+                    }
+                    return false;
+                });
+
+                if (showRestartMenu)
+                {
+                    var menuRestart = new MenuItem() { Header = "继续下载" };
+                    menuRestart.Click += MenuRestart_Click;
+                    contextMenu.Items.Add(menuRestart);
+                    contextMenu.Items.Add(new Separator());
+                }
+                else if (showStopMenu)
+                {
+                    MenuItem menuStop = new MenuItem() { Header = "暂停" };
+                    menuStop.Click += MenuStop_Click;
+                    contextMenu.Items.Add(menuStop);
+                    contextMenu.Items.Add(new Separator());
+                }
+
+
+                MenuItem menuCopyTitle = new MenuItem() { Header = "复制标题" };
+                menuCopyTitle.Click += MenuCopyTitle_Click;
+                contextMenu.Items.Add(menuCopyTitle);
+
+                MenuItem menuCopyLink = new MenuItem() { Header = "复制链接" };
+                menuCopyLink.Click += MenuCopyLink_Click;
+                contextMenu.Items.Add(menuCopyLink);
+
+                MenuItem menuDelete = new MenuItem() { Header = $"删除任务({selectedItems.Count})" };
+                menuDelete.Click += MenuDelete_Click;
+                contextMenu.Items.Add(menuDelete);
+
+                MenuItem menuDeleteFile = new MenuItem() { Header = $"删除任务及文件({selectedItems.Count})" };
+                menuDeleteFile.Click += MenuDeleteFile_Click;
+                contextMenu.Items.Add(menuDeleteFile);
+
+                DataGrid row = sender as DataGrid;
+                row.ContextMenu = contextMenu;
             }
         }
     }
